@@ -6,6 +6,20 @@ import numpy as np
 import plotly.express as px
 import datetime
 
+# --- CSS Hack: Hide Crosshair, Keep Axis Stretch Arrows ---
+st.markdown(
+    """
+    <style>
+    /* This forces the main chart cursor to be a normal arrow, 
+       while allowing the X and Y axes to keep their sideways/up-down stretch arrows! */
+    .js-plotly-plot .plotly .cursor-crosshair {
+        cursor: default !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
 # --- Number Formatter for Hover Text ---
 def format_large_number(n):
     """Formats large numbers into M, B, T rounding to the nearest tenth."""
@@ -30,6 +44,38 @@ def calculate_gamma(S, K, T, r, sigma):
     gamma = norm.pdf(d1) / (S * sigma * np.sqrt(T))
     return gamma
 
+
+# --- Auto-Select Text on Focus ---
+def enable_auto_select():
+    st.html(
+        """
+        <script>
+        const parentDoc = window.parent.document;
+        
+        const selectOnFocus = () => {
+            parentDoc.querySelectorAll('input[type="text"]').forEach((input) => {
+                // Check if we already added the listener to prevent duplicates
+                if (!input.dataset.hasSelectListener) {
+                    input.addEventListener('focus', () => input.select());
+                    input.dataset.hasSelectListener = 'true';
+                }
+            });
+        };
+
+        // Run once immediately
+        selectOnFocus();
+
+        // Keep watching for React re-renders
+        const observer = new MutationObserver(selectOnFocus);
+        observer.observe(parentDoc.body, { childList: true, subtree: true });
+        </script>
+        """,
+        unsafe_allow_javascript=True 
+    )
+
+# Call the function to activate it
+enable_auto_select()
+
 # --- App Layout & Logic ---
 def make_uppercase():
     st.session_state.ticker_input = st.session_state.ticker_input.upper()
@@ -45,22 +91,6 @@ ticker_input = st.sidebar.text_input("Enter Ticker Symbol", key="ticker_input", 
 
 st.set_page_config(page_title="Universal GEX Dashboard", layout="wide")
 st.title(f"{ticker_input} Gamma Exposure (GEX) Profile")
-
-# --- CSS Hack to Remove Crosshair ---
-st.markdown(
-    """
-    <style>
-    /* Force the default arrow pointer on all Plotly charts */
-    .js-plotly-plot .plotly .cursor-crosshair {
-        cursor: default !important;
-    }
-    .js-plotly-plot .plotly .draglayer {
-        cursor: default !important;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
 
 # 2. Fetch Ticker Data
 @st.cache_data(ttl=60) 
@@ -215,17 +245,27 @@ if ticker_input:
                             annotation_font_color="orange"
                         )
                     
-                    # --- NEW UI SCALING UPDATES ---
+                    # Define startup zoom bounds
+                    startup_x_min = spot_price * 0.95
+                    startup_x_max = spot_price * 1.05
+
                     fig.update_layout(
-                        xaxis_tickformat='d', 
+                        xaxis=dict(
+                            tickformat='d',
+                            range=[startup_x_min, startup_x_max],
+                            fixedrange=False # Explicitly unlocks the X-axis for stretching
+                        ), 
+                        yaxis=dict(
+                            fixedrange=False # Explicitly unlocks the Y-axis for stretching
+                        ),
                         template="plotly_dark", 
-                        dragmode=False,
-                        height=600,                 # Increases the vertical height of the chart
-                        font=dict(size=12),         # Scales up all text (title, axis labels, tick marks)
-                        bargap=0.01,                # Reduces space between bars, making them thicker
-                        hoverlabel=dict(font_size=15) # Makes the hover tooltip text even larger
+                        dragmode="zoom",          
+                        height=750,                 
+                        font=dict(size=16),         
+                        bargap=0.15,                
+                        hoverlabel=dict(font_size=18) 
                     )
-                    
+
                     st.plotly_chart(fig, width='stretch', config={'scrollZoom': True})
 
                     st.write("### Raw Strike Data")
