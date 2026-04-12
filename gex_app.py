@@ -130,27 +130,38 @@ if ticker_input:
         )
 
         ticker_obj = yf.Ticker(ticker_input)
-        selected_exp = st.sidebar.selectbox("Select Expiration Date", expirations)
 
-        # 3. Process Options Chain
-        if selected_exp:
-            chain = ticker_obj.option_chain(selected_exp)
-            calls = chain.calls
-            puts = chain.puts
+        # --- NEW FEATURE: Multi-Select with a max of 4 ---
+        selected_exps = st.sidebar.multiselect(
+            "Select Expiration Date(s)", 
+            expirations, 
+            default=[expirations[0]] if expirations else None,
+            max_selections=4
+        )
+
+        # 3. Process Options Chains
+        if selected_exps:
+            all_dfs = [] # List to hold dataframes from multiple expirations
             
-            if calls.empty and puts.empty:
-                st.warning(f"⚠️ Yahoo Finance returned empty data for the {selected_exp} expiration. Try another date.")
-            else:
+            # Loop through each selected expiration
+            for exp in selected_exps:
+                chain = ticker_obj.option_chain(exp)
+                calls = chain.calls
+                puts = chain.puts
+                
+                if calls.empty and puts.empty:
+                    st.warning(f"⚠️ Yahoo Finance returned empty data for {exp}. Skipping.")
+                    continue
+
                 calls['openInterest'] = calls['openInterest'].fillna(0)
                 puts['openInterest'] = puts['openInterest'].fillna(0)
                 calls['impliedVolatility'] = calls['impliedVolatility'].fillna(0.0001)
                 puts['impliedVolatility'] = puts['impliedVolatility'].fillna(0.0001)
 
-                exp_date = datetime.datetime.strptime(selected_exp, "%Y-%m-%d").date()
+                exp_date = datetime.datetime.strptime(exp, "%Y-%m-%d").date()
                 today = datetime.date.today()
                 days_to_exp = (exp_date - today).days
                 T = max(days_to_exp / 365.0, 1 / 365.0) 
-                
                 r = 0.053 
 
                 calls['Gamma'] = calls.apply(lambda row: calculate_gamma(spot_price, row['strike'], T, r, row['impliedVolatility']), axis=1)
@@ -161,8 +172,16 @@ if ticker_input:
                 puts['GEX'] = puts['openInterest'] * puts['Gamma'] * 100 * spot_price * -1
                 puts['Type'] = 'Put'
 
-                df = pd.concat([calls, puts])
-                
+                # Add processed calls and puts for this specific expiration to our master list
+                all_dfs.extend([calls, puts])
+            
+            # --- AGGREGATION ---
+            if not all_dfs:
+                st.warning("⚠️ No valid data could be processed for the selected dates.")
+            else:
+                # Smash all the expirations together into one massive dataset
+                df = pd.concat(all_dfs, ignore_index=True)
+
                 lower_bound = spot_price * 0.85
                 upper_bound = spot_price * 1.15
                 df_filtered = df[(df['strike'] >= lower_bound) & (df['strike'] <= upper_bound)]
@@ -198,12 +217,15 @@ if ticker_input:
                     if zero_crossings:
                         gamma_flip = min(zero_crossings, key=lambda x: abs(x - spot_price))
 
-# 4. Plotting with Plotly
+                    # Format the title to show all selected dates
+                    title_dates = ", ".join(selected_exps)
+
+                    # 4. Plotting with Plotly
                     fig = px.bar(
                         net_gex, 
                         x='strike', 
                         y='GEX', 
-                        title=f"Net GEX for {ticker_input} ({selected_exp})",
+                        title=f"Net GEX for {ticker_input} ({title_dates})",
                         labels={'strike': 'Strike Price', 'GEX': 'Net Gamma Exposure ($)'},
                         color='GEX',
                         color_continuous_scale=[(0, "red"), (0.5, "white"), (1, "green")],
