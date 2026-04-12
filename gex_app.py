@@ -6,6 +6,8 @@ import numpy as np
 import plotly.express as px
 import datetime
 
+st.set_page_config(page_title="Universal GEX Dashboard", layout="wide")
+
 # --- CSS Hack: Hide Crosshair, Keep Axis Stretch Arrows ---
 st.markdown(
     """
@@ -113,7 +115,7 @@ def get_ticker_data(ticker_symbol):
         expirations = list(temp_ticker.options)
         return spot_price, ext_price, expirations
     except Exception as e:
-        return None, []
+        return None, None, []
 
 if ticker_input:
     spot_price, ext_price, expirations = get_ticker_data(ticker_input)
@@ -258,7 +260,7 @@ if ticker_input:
                     )
                     
                     # Add Gamma Flip Line
-                    if gamma_flip:
+                    if gamma_flip is not None:
                         fig.add_vline(
                             x=gamma_flip, 
                             line_dash="dot", 
