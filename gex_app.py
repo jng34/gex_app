@@ -5,15 +5,26 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import datetime
+import calendar
 
 # --- CSS Hack: Hide Crosshair, Keep Axis Stretch Arrows ---
 st.markdown(
     """
     <style>
-    /* This forces the main chart cursor to be a normal arrow, 
-       while allowing the X and Y axes to keep their sideways/up-down stretch arrows! */
+    /* 1. Force the main chart cursor to be a normal arrow */
     .js-plotly-plot .plotly .cursor-crosshair {
         cursor: default !important;
+    }
+    
+    /* 2. Force single line and adjust font to fit */
+    .stMultiSelect [data-baseweb="tag"] {
+        max-width: 100% !important;
+    }
+    .stMultiSelect [data-baseweb="tag"] span {
+        white-space: nowrap !important;     /* Forces text to stay on one straight line */
+        font-size: 12px !important;         /* Shrinks the font slightly so the full text fits */
+        overflow: hidden !important;
+        text-overflow: ellipsis !important; /* Adds '...' ONLY if a date is unusually long */
     }
     </style>
     """,
@@ -43,6 +54,26 @@ def calculate_gamma(S, K, T, r, sigma):
     d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
     gamma = norm.pdf(d1) / (S * sigma * np.sqrt(T))
     return gamma
+
+# --- Expiration Label Generator ---
+def get_expiration_label(exp_str):
+    """Calculates DTE and determines if it is a Monthly (3rd Friday) or Weekly."""
+    exp_date = datetime.datetime.strptime(exp_str, "%Y-%m-%d").date()
+    today = datetime.date.today()
+    dte = (exp_date - today).days
+
+    # Find the 3rd Friday of the month
+    month_cal = calendar.monthcalendar(exp_date.year, exp_date.month)
+    fridays = [week[4] for week in month_cal if week[4] != 0]
+    third_friday = fridays[2] if len(fridays) >= 3 else None
+
+    # If the expiration day matches the 3rd Friday, it's a Monthly
+    if exp_date.day == third_friday:
+        type_str = "(M)"
+    else:
+        type_str = "(W)"
+
+    return f"{exp_str} ({dte} DTE) {type_str}"
 
 
 # --- Auto-Select Text on Focus ---
@@ -131,20 +162,27 @@ if ticker_input:
 
         ticker_obj = yf.Ticker(ticker_input)
 
-        # --- NEW FEATURE: Multi-Select with a max of 4 ---
+        # --- THE TRANSLATION DICTIONARY ---
+        # Map the pretty labels to the raw YYYY-MM-DD strings
+        exp_mapping = {get_expiration_label(exp): exp for exp in expirations}
+        display_options = list(exp_mapping.keys())
+        
         selected_exps = st.sidebar.multiselect(
             "Select Expiration Date(s)", 
-            expirations, 
-            default=[expirations[0]] if expirations else None,
+            display_options, 
+            default=[display_options[0]] if display_options else None,
             max_selections=4
         )
 
         # 3. Process Options Chains
         if selected_exps:
-            all_dfs = [] # List to hold dataframes from multiple expirations
+            # Translate the user's pretty selection back to the raw dates yfinance needs
+            raw_selected_exps = [exp_mapping[label] for label in selected_exps]
+
+            all_dfs = []
             
             # Loop through each selected expiration
-            for exp in selected_exps:
+            for exp in raw_selected_exps:
                 chain = ticker_obj.option_chain(exp)
                 calls = chain.calls
                 puts = chain.puts
