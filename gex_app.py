@@ -253,7 +253,8 @@ if ticker_input:
                         line_dash="dash", 
                         line_color="blue", 
                         annotation_text=f"Spot: ${spot_price:.2f}",
-                        annotation_position="top" 
+                        annotation_position="top",
+                        annotation_font_color="blue"
                     )
                     
                     # Add Gamma Flip Line
@@ -261,10 +262,10 @@ if ticker_input:
                         fig.add_vline(
                             x=gamma_flip, 
                             line_dash="dot", 
-                            line_color="orange", 
+                            line_color="red", 
                             annotation_text=f"Gamma Flip: ${gamma_flip:.2f}",
-                            annotation_position="bottom",
-                            annotation_font_color="orange"
+                            annotation_position="left",
+                            annotation_font_color="red"
                         )
                     
                     # Define startup zoom bounds
@@ -282,8 +283,8 @@ if ticker_input:
                         ),
                         template="plotly_dark", 
                         dragmode="zoom",          
-                        height=750,                 
-                        font=dict(size=16),         
+                        height=600,                 
+                        font=dict(size=15),         
                         bargap=0.15,                
                         hoverlabel=dict(font_size=18) 
                     )
