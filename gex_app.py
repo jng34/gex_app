@@ -113,7 +113,7 @@ def get_ticker_data(ticker_symbol):
         expirations = list(temp_ticker.options)
         return spot_price, ext_price, expirations
     except Exception as e:
-        return None, []
+        return None, None, []
 
 if ticker_input:
     spot_price, ext_price, expirations = get_ticker_data(ticker_input)
