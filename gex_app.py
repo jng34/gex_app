@@ -110,8 +110,8 @@ def get_ticker_data(ticker_symbol):
         # If extended hours exist, grab the latest tick. Otherwise, default to spot.
         ext_price = float(hist_ext['Close'].iloc[-1]) if not hist_ext.empty else spot_price
 
-        exps = list(temp_ticker.options)
-        return spot_price, ext_price, exps
+        expirations = list(temp_ticker.options)
+        return spot_price, ext_price, expirations
     except Exception as e:
         return None, []
 
