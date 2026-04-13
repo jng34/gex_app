@@ -325,20 +325,24 @@ if ticker_input:
                         xaxis=dict(
                             tickformat='d',
                             range=[startup_x_min, startup_x_max],
-                            fixedrange=False 
+                            fixedrange=False,
+                            automargin=True,
+                            title_standoff=15
                         ), 
                         yaxis=dict(
                             fixedrange=False 
                         ),
                         template="plotly_dark", 
                         dragmode="zoom",         
-                        height=750,                 
-                        font=dict(size=16),         
+                        height=600,                 
+                        margin=dict(t=50, b=100, l=50, r=20), # <--- Forces an 80px bottom margin so labels NEVER cut off
+                        font=dict(size=14),         # <--- Slightly scaled down so the text doesn't crowd the container
                         bargap=0.15,                
-                        hoverlabel=dict(font_size=18),
-                        legend_title_text='' 
+                        hoverlabel=dict(font_size=16),
+                        legend_title_text='',
+                        autosize=True               # <--- Ensures Plotly listens to Streamlit's container width
                     )
-
+                    
                     st.plotly_chart(fig, width='stretch', config={'scrollZoom': True})
 
                     st.write("### Raw Strike Data")
