@@ -222,20 +222,24 @@ if ticker_input:
 
                 lower_bound = spot_price * 0.85
                 upper_bound = spot_price * 1.15
+
                 df_filtered = df[(df['strike'] >= lower_bound) & (df['strike'] <= upper_bound)]
                 df_filtered = df_filtered.dropna(subset=['GEX'])
-
-                net_gex = df_filtered.groupby('strike')['GEX'].sum().reset_index()
                 
-                if net_gex.empty:
-                    st.warning("⚠️ Data pulled successfully, but no strikes found within 15% of the current spot price with active Open Interest.")
-                else:
-                    # --- NEW FEATURE: Apply the formatting function ---
-                    net_gex['GEX_Formatted'] = net_gex['GEX'].apply(format_large_number)
+                # --- NEW FEATURE: Group by Strike AND Type for the colored bars ---
+                gex_breakdown = df_filtered.groupby(['strike', 'Type'])['GEX'].sum().reset_index()
+                gex_breakdown['GEX_Formatted'] = gex_breakdown['GEX'].apply(format_large_number)
 
-                    # --- NEW FEATURE: Calculate Gamma Flip (Zero Gamma) ---
-                    # Sort strikes chronologically to map the transitions properly
-                    net_gex = net_gex.sort_values(by='strike').reset_index(drop=True)
+                # --- BACKGROUND MATH: Still calculate Net GEX for the Gamma Flip line ---
+                net_gex = df_filtered.groupby('strike')['GEX'].sum().reset_index()
+                net_gex = net_gex.sort_values(by='strike').reset_index(drop=True)
+
+                net_gex['GEX_Formatted'] = net_gex['GEX'].apply(format_large_number)
+                
+                # We now check if the breakdown is empty instead of net_gex
+                if gex_breakdown.empty:
+                    st.warning(f"⚠️ No strikes found within range.")
+                else:
                     zero_crossings = []
                     
                     for i in range(1, len(net_gex)):
@@ -256,34 +260,43 @@ if ticker_input:
                         gamma_flip = min(zero_crossings, key=lambda x: abs(x - spot_price))
 
                     # Format the title to show all selected dates
-                    title_dates = ", ".join(selected_exps)
+                        title_dates = ", ".join(raw_selected_exps)
+
+                    # --- NEW FEATURE: Upper Right Chart Toggle ---
+                    # We use columns to push the toggle switch to the right side of the screen
+                    col1, col2 = st.columns([5, 1])
+                    with col2:
+                        show_split = st.toggle("Split Put/Call View", value=True)
 
                     # 4. Plotting with Plotly
-                    fig = px.bar(
-                        net_gex, 
-                        x='strike', 
-                        y='GEX', 
-                        title=f"Net GEX for {ticker_input} ({title_dates})",
-                        labels={'strike': 'Strike Price', 'GEX': 'Net Gamma Exposure ($)'},
-                        color='GEX',
-                        color_continuous_scale=[(0, "red"), (0.5, "white"), (1, "green")],
-                        color_continuous_midpoint=0,
-                        custom_data=['GEX_Formatted']
-                    )
-
-                    fig.update_layout(
-                        xaxis=dict(
-                            title=dict(text='Strike Price', font=dict(size=18)),
-                            tickfont=dict(size=16)
-                        ),
-                        yaxis=dict(
-                            title=dict(text='Net Gamma Exposure ($)', font=dict(size=18)),
-                            tickfont=dict(size=16)
-                        ),
-                        font=dict(size=16)  # general text size for title / legend
-                    )
-                                        
-                    fig.update_traces(hovertemplate='<b>Strike:</b> %{x}<br><b>Net GEX:</b> %{customdata[0]}<extra></extra>')
+                    if show_split:
+                        # Render the Split Green/Red Chart
+                        fig = px.bar(
+                            gex_breakdown, 
+                            x='strike', 
+                            y='GEX', 
+                            color='Type', 
+                            title=f"Put/Call GEX Profile for {ticker_input} ({title_dates})",
+                            labels={'strike': 'Strike Price', 'GEX': 'Gamma Exposure ($)', 'Type': 'Option Type'},
+                            color_discrete_map={'Call': '#00E676', 'Put': '#FF1744'}, 
+                            custom_data=['GEX_Formatted'] 
+                        )
+                    else:
+                        # Render the Original Net GEX Heatmap Chart
+                        fig = px.bar(
+                            net_gex, 
+                            x='strike', 
+                            y='GEX', 
+                            title=f"Net GEX Profile for {ticker_input} ({title_dates})",
+                            labels={'strike': 'Strike Price', 'GEX': 'Net Gamma Exposure ($)'},
+                            color='GEX',
+                            color_continuous_scale=[(0, "red"), (0.5, "white"), (1, "green")],
+                            color_continuous_midpoint=0,
+                            custom_data=['GEX_Formatted'] 
+                        )
+                    
+                    # Apply the hover template to whichever chart is active
+                    fig.update_traces(hovertemplate='<b>Strike:</b> %{x}<br><b>GEX:</b> %{customdata[0]}<extra></extra>')
                     
                     # Add Spot Price Line
                     fig.add_vline(
@@ -291,8 +304,7 @@ if ticker_input:
                         line_dash="dash", 
                         line_color="blue", 
                         annotation_text=f"Spot: ${spot_price:.2f}",
-                        annotation_position="top",
-                        annotation_font_color="blue"
+                        annotation_position="top" 
                     )
                     
                     # Add Gamma Flip Line
@@ -300,13 +312,12 @@ if ticker_input:
                         fig.add_vline(
                             x=gamma_flip, 
                             line_dash="dot", 
-                            line_color="red", 
+                            line_color="orange", 
                             annotation_text=f"Gamma Flip: ${gamma_flip:.2f}",
-                            annotation_position="left",
-                            annotation_font_color="red"
+                            annotation_position="bottom",
+                            annotation_font_color="orange"
                         )
                     
-                    # Define startup zoom bounds
                     startup_x_min = spot_price * 0.95
                     startup_x_max = spot_price * 1.05
 
@@ -314,17 +325,18 @@ if ticker_input:
                         xaxis=dict(
                             tickformat='d',
                             range=[startup_x_min, startup_x_max],
-                            fixedrange=False # Explicitly unlocks the X-axis for stretching
+                            fixedrange=False 
                         ), 
                         yaxis=dict(
-                            fixedrange=False # Explicitly unlocks the Y-axis for stretching
+                            fixedrange=False 
                         ),
                         template="plotly_dark", 
-                        dragmode="zoom",          
-                        height=600,                 
-                        font=dict(size=15),         
+                        dragmode="zoom",         
+                        height=750,                 
+                        font=dict(size=16),         
                         bargap=0.15,                
-                        hoverlabel=dict(font_size=18) 
+                        hoverlabel=dict(font_size=18),
+                        legend_title_text='' 
                     )
 
                     st.plotly_chart(fig, width='stretch', config={'scrollZoom': True})
