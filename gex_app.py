@@ -345,5 +345,66 @@ if ticker_input:
                     
                     st.plotly_chart(fig, width='stretch', config={'scrollZoom': True})
 
-                    st.write("### Raw Strike Data")
-                    st.dataframe(net_gex.sort_values(by='strike'))
+                    # Dynamic Raw Data Table ---
+                    st.markdown("### Raw Strike Data")
+                    
+                    if show_split:
+                        # Pivot the data so Calls and Puts are side-by-side for each strike
+                        split_table = df_filtered.pivot_table(
+                            index='strike', 
+                            columns='Type', 
+                            values='GEX', 
+                            aggfunc='sum'
+                        ).reset_index().fillna(0)
+                        
+                        # Failsafe: Ensure columns exist even if the chain is weirdly empty
+                        if 'Call' not in split_table.columns: split_table['Call'] = 0
+                        if 'Put' not in split_table.columns: split_table['Put'] = 0
+                            
+                        # Apply our nice M/B/T formatter
+                        split_table['Call GEX'] = split_table['Call'].apply(format_large_number)
+                        split_table['Put GEX'] = split_table['Put'].apply(format_large_number)
+                        
+                        # Clean up for display
+                        display_df = split_table[['strike', 'Call GEX', 'Put GEX']].sort_values('strike').set_index('strike')
+
+                        # --- NEW FEATURE: ITM Background Shading ---
+                        def style_itm(row):
+                            s = row.name if 'strike' not in row else row['strike']
+                            styles = []
+                            for col in row.index:
+                                # Call ITM: Shade the Strike and Call GEX columns
+                                if s < spot_price and col in ['strike', 'Call GEX']:
+                                    styles.append('background-color: rgba(128, 128, 128, 0.2)')
+                                # Put ITM: Shade the Strike and Put GEX columns
+                                elif s > spot_price and col in ['strike', 'Put GEX']:
+                                    styles.append('background-color: rgba(128, 128, 128, 0.2)')
+                                else:
+                                    styles.append('')
+                            return styles
+                            
+                        # Apply the style and hide the default pandas index numbers
+                        styled_df = display_df.style.apply(style_itm, axis=1)
+                        st.dataframe(
+                            styled_df, 
+                            width='stretch',
+                            column_config={
+                                "strike": st.column_config.NumberColumn("Strike", width="medium"),
+                                "Call GEX": st.column_config.Column(width="medium"),
+                                "Put GEX": st.column_config.Column(width="medium")
+                            }
+                        )
+                        
+                    else:
+                        # Simple Net GEX table
+                        display_df = net_gex[['strike', 'GEX_Formatted']].copy()
+                        display_df.rename(columns={'GEX_Formatted': 'Net GEX'}, inplace=True)
+                        display_df = display_df.sort_values('strike').set_index('strike')
+                        st.dataframe(
+                            display_df, 
+                            width='stretch',
+                            column_config={
+                                "strike": st.column_config.NumberColumn("Strike", width="medium"),
+                                "Net GEX": st.column_config.Column(width="medium")
+                            }
+                        )
