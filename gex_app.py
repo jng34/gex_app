@@ -233,12 +233,22 @@ if ticker_input:
                 # --- BACKGROUND MATH: Still calculate Net GEX for the Gamma Flip line ---
                 net_gex = df_filtered.groupby('strike')['GEX'].sum().reset_index()
                 net_gex = net_gex.sort_values(by='strike').reset_index(drop=True)
-
                 net_gex['GEX_Formatted'] = net_gex['GEX'].apply(format_large_number)
                 
                 # We now check if the breakdown is empty instead of net_gex
-                if gex_breakdown.empty:
-                    st.warning(f"⚠️ No strikes found within range.")
+                if gex_breakdown.empty or gex_breakdown['GEX'].abs().sum() == 0:
+                    if ticker_input.startswith('^'):
+                        st.info(
+                            f"🌙 **After-Hours Data Unavailable**\n\n"
+                            f"Yahoo Finance clears options volume and open interest data for indices like `{ticker_input}` outside of regular US market hours. "
+                            f"The data will repopulate tomorrow morning.\n\n"
+                            f"💡 **Try using the ETF equivalent (e.g., `SPY` instead of `^SPX`) to test the dashboard right now!**"
+                        )
+                    else:
+                        st.warning(f"⚠️ No active strikes found within range.")
+                        
+                    # EMERGENCY BRAKE: Halts the script before the chart crashes!
+                    st.stop()
                 else:
                     zero_crossings = []
                     
