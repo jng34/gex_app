@@ -178,16 +178,29 @@ if ticker_input:
         # Failsafe: If none match (or it's the very first time loading), pick the nearest expiration
         if not valid_defaults and display_options:
             valid_defaults = [display_options[0]]
+
+        # Clean up the widget's internal state if the options changed
+        # (This prevents Streamlit from crashing when switching from SPY to AMD)
+        if 'exp_widget' in st.session_state:
+            if any(val not in display_options for val in st.session_state.exp_widget):
+                del st.session_state['exp_widget']
+
+        # Inject the validated defaults into the widget's native state BEFORE it renders
+        if 'exp_widget' not in st.session_state:
+            st.session_state.exp_widget = valid_defaults
+
+        # Callback to sync memory the exact millisecond a user clicks
+        def sync_exps():
+            st.session_state.saved_exps = st.session_state.exp_widget
         
         selected_exps = st.sidebar.multiselect(
             "Select Expiration Date(s)", 
             display_options, 
-            default=valid_defaults,
-            max_selections=4
+            max_selections=4,
+            key="exp_widget",
+            on_change=sync_exps
         )
 
-        # Save whatever is currently selected back into memory for the next ticker change
-        st.session_state.saved_exps = selected_exps
 
         raw_selected_exps = [exp_mapping[label] for label in selected_exps]
         title_dates = ", ".join(raw_selected_exps)
@@ -288,8 +301,6 @@ if ticker_input:
                     if zero_crossings:
                         gamma_flip = min(zero_crossings, key=lambda x: abs(x - spot_price))
 
-
-                    # --- NEW FEATURE: Upper Right Chart Toggle ---
                     # We use columns to push the toggle switch to the right side of the screen
                     col1, col2 = st.columns([5, 1])
                     with col2:
