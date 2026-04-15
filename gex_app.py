@@ -167,12 +167,30 @@ if ticker_input:
         exp_mapping = {get_expiration_label(exp): exp for exp in expirations}
         display_options = list(exp_mapping.keys())
         
+        # --- Expiration Memory ---
+        # Initialize the memory bank on first load
+        if 'saved_exps' not in st.session_state:
+            st.session_state.saved_exps = []
+
+        # Check which of the previously selected dates actually exist for this new ticker
+        valid_defaults = [exp for exp in st.session_state.saved_exps if exp in display_options]
+        
+        # Failsafe: If none match (or it's the very first time loading), pick the nearest expiration
+        if not valid_defaults and display_options:
+            valid_defaults = [display_options[0]]
+        
         selected_exps = st.sidebar.multiselect(
             "Select Expiration Date(s)", 
             display_options, 
-            default=[display_options[0]] if display_options else None,
+            default=valid_defaults,
             max_selections=4
         )
+
+        # Save whatever is currently selected back into memory for the next ticker change
+        st.session_state.saved_exps = selected_exps
+
+        raw_selected_exps = [exp_mapping[label] for label in selected_exps]
+        title_dates = ", ".join(raw_selected_exps)
 
         # 3. Process Options Chains
         if selected_exps:
@@ -215,7 +233,8 @@ if ticker_input:
             
             # --- AGGREGATION ---
             if not all_dfs:
-                st.warning("⚠️ No valid data could be processed for the selected dates.")
+                st.warning(f"⚠️ Yahoo Finance returned empty options data for '{ticker_input}' on the selected dates.")
+                st.stop()
             else:
                 # Smash all the expirations together into one massive dataset
                 df = pd.concat(all_dfs, ignore_index=True)
@@ -269,8 +288,6 @@ if ticker_input:
                     if zero_crossings:
                         gamma_flip = min(zero_crossings, key=lambda x: abs(x - spot_price))
 
-                    # Format the title to show all selected dates
-                        title_dates = ", ".join(raw_selected_exps)
 
                     # --- NEW FEATURE: Upper Right Chart Toggle ---
                     # We use columns to push the toggle switch to the right side of the screen
