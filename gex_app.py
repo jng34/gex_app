@@ -75,50 +75,30 @@ def get_expiration_label(exp_str):
 
     return f"{exp_str} ({dte} DTE) {type_str}"
 
-
-# --- Auto-Select Text on Focus ---
-def enable_auto_select():
-    st.html(
-        """
-        <script>
-        const parentDoc = window.parent.document;
-        
-        const selectOnFocus = () => {
-            parentDoc.querySelectorAll('input[type="text"]').forEach((input) => {
-                // Check if we already added the listener to prevent duplicates
-                if (!input.dataset.hasSelectListener) {
-                    input.addEventListener('focus', () => input.select());
-                    input.dataset.hasSelectListener = 'true';
-                }
-            });
-        };
-
-        // Run once immediately
-        selectOnFocus();
-
-        // Keep watching for React re-renders
-        const observer = new MutationObserver(selectOnFocus);
-        observer.observe(parentDoc.body, { childList: true, subtree: true });
-        </script>
-        """,
-        unsafe_allow_javascript=True 
-    )
-
-# Call the function to activate it
-enable_auto_select()
-
 # --- App Layout & Logic ---
 def make_uppercase():
     st.session_state.ticker_input = st.session_state.ticker_input.upper()
 
-# Initialize session state for ticker input
-if 'ticker_input' not in st.session_state:
-    st.session_state.ticker_input = "SPY"
-
-# 1. Sidebar Inputs
 st.sidebar.header("Settings")
-# Allow user to input any ticker, default to SPY, and force uppercase
-ticker_input = st.sidebar.text_input("Enter Ticker Symbol", key="ticker_input", on_change=make_uppercase)
+
+if 'active_ticker' not in st.session_state:
+    st.session_state.active_ticker = "^SPX"
+
+def submit_ticker():
+    # Grab the typed text, make it uppercase, and save it to memory
+    new_symbol = st.session_state.ticker_search_box.strip().upper()
+    if new_symbol:
+        st.session_state.active_ticker = new_symbol
+    st.session_state.ticker_search_box = ""
+
+st.sidebar.text_input(
+    "Enter Ticker Symbol", 
+    key="ticker_search_box", 
+    placeholder="e.g., ^SPX, SPY, AAPL",
+    on_change=submit_ticker
+)
+
+ticker_input = st.session_state.active_ticker
 
 st.set_page_config(page_title="Universal GEX Dashboard", layout="wide")
 st.title(f"{ticker_input} Gamma Exposure (GEX) Profile")
@@ -179,8 +159,6 @@ if ticker_input:
         if not valid_defaults and display_options:
             valid_defaults = [display_options[0]]
 
-        # Clean up the widget's internal state if the options changed
-        # (This prevents Streamlit from crashing when switching from SPY to AMD)
         if 'exp_widget' in st.session_state:
             if any(val not in display_options for val in st.session_state.exp_widget):
                 del st.session_state['exp_widget']
