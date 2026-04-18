@@ -82,7 +82,7 @@ def make_uppercase():
 st.sidebar.header("Settings")
 
 if 'active_ticker' not in st.session_state:
-    st.session_state.active_ticker = "^SPX"
+    st.session_state.active_ticker = ""
 
 def submit_ticker():
     # Grab the typed text, make it uppercase, and save it to memory
@@ -417,3 +417,52 @@ if ticker_input:
                         hide_index=True,
                         column_config=dynamic_col_config
                     )
+else:
+    # --- SPLASH SCREEN / EMPTY STATE ---
+    
+    # It forces the main container to take up exactly 100% of the screen height
+    # and vertically/horizontally centers everything inside it.
+    st.markdown(
+        """
+        <style>
+        /* Target the main Streamlit container */
+        [data-testid="stAppViewBlockContainer"] {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100vh; 
+            padding-top: 0rem !important;
+            padding-bottom: 0rem !important;
+            overflow: hidden; /* Kills the main page scrollbar */
+        }
+        
+        /* Force the title text to center align */
+        [data-testid="stMarkdownContainer"] h1 {
+            text-align: center;
+        }
+
+        /* Constrain the image height so it never pushes the title off-screen */
+        [data-testid="stImage"] img {
+            max-height: 55vh; 
+            object-fit: contain;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+    try:
+        # Try to load your local saved image
+        st.image("images/gex_cover.png", width="stretch")
+    except Exception:
+        # Fallback to the sleek web image if the local file isn't found
+        st.image("https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?q=80&w=1200&auto=format&fit=crop", width="stretch")
+
+    st.markdown(
+        "<p style='text-align: center; font-size: 18px; color: #a5a5a5; margin-top: 20px;'>"
+        "Please enter a ticker symbol in the sidebar search box to generate a GEX profile."
+        "</p>", 
+        unsafe_allow_html=True
+    )
+            
