@@ -7,7 +7,7 @@ import plotly.express as px
 import datetime
 import calendar
 
-# --- CSS Hack: Hide Crosshair, Keep Axis Stretch Arrows ---
+# --- CSS: Hide Crosshair, Keep Axis Stretch Arrows ---
 st.markdown(
     """
     <style>
@@ -75,6 +75,17 @@ def get_expiration_label(exp_str):
 
     return f"{exp_str} ({dte} DTE) {type_str}"
 
+# --- SPX/SPY Ratio Converter ---
+def get_spx_spy_ratio():
+    try:
+        spx_live = float(yf.Ticker("^SPX").history(period="1d")['Close'].iloc[-1])
+        spy_live = float(yf.Ticker("SPY").history(period="1d")['Close'].iloc[-1])
+        # Calculate the exact dollar gap between SPX and 10x SPY
+        offset_gap = spx_live - (spy_live * 10)
+        return offset_gap, spx_live, spy_live
+    except Exception:
+        return 0.0, 5000.0, 500.0
+
 # --- App Layout & Logic ---
 def make_uppercase():
     st.session_state.ticker_input = st.session_state.ticker_input.upper()
@@ -99,6 +110,72 @@ st.sidebar.text_input(
 )
 
 ticker_input = st.session_state.active_ticker
+
+st.sidebar.markdown("<br>", unsafe_allow_html=True) # Adds a little spacing
+
+def swap_converter_direction():
+    if st.session_state.conv_dir == "SPY_TO_SPX":
+        st.session_state.conv_dir = "SPX_TO_SPY"
+    else:
+        st.session_state.conv_dir = "SPY_TO_SPX"
+
+
+# SPX <-> SPY Converter
+def render_converter():
+    offset_gap, spx_live, spy_live = get_spx_spy_ratio()
+
+    # 1. Initialize the direction state and target memory
+    if "conv_dir" not in st.session_state:
+        st.session_state.conv_dir = "SPY_TO_SPX"  # Defaults to SPY -> SPX as requested
+    if "calc_target_spx" not in st.session_state:
+        st.session_state.calc_target_spx = spx_live
+    if "calc_target_spy" not in st.session_state:
+        st.session_state.calc_target_spy = spy_live
+
+    # 2. Callback function to instantly swap the active direction
+
+
+    with st.sidebar.popover("SPX ↔ SPY Converter", use_container_width=True):    
+        col_in, col_btn, col_out = st.columns([4, 2, 4], vertical_alignment="bottom")
+        
+        # Place the swap button in the center column
+        with col_btn:
+            st.markdown(
+                """
+                <style>
+                /* Target the paragraph tag inside any tertiary button */
+                button[kind="tertiary"] p {
+                    font-size: 32px !important; 
+                    line-height: 0 !important; 
+                }
+                [data-testid="stMetric"] {
+                    margin-top: 16px !important; 
+                }
+                </style>
+                """,
+                unsafe_allow_html=True
+            )
+            st.button("↔️", on_click=swap_converter_direction, use_container_width=True, key="swap_btn", type="tertiary")
+
+        # Render the UI dynamically based on which direction is active
+        if st.session_state.conv_dir == "SPY_TO_SPX":
+            with col_in:
+                spy_target = st.number_input("**SPY**", step=1.0, format="%.2f", key="calc_target_spy")
+            with col_out:
+                spx_equiv = (spy_target * 10.0) + offset_gap
+                st.metric(label="**SPX**", value=f"${spx_equiv:.2f}")
+                
+        else: # SPX_TO_SPY direction
+            with col_in:
+                spx_target = st.number_input("**SPX**", step=10.0, format="%.2f", key="calc_target_spx")
+            with col_out:
+                spy_equiv = (spx_target - offset_gap) / 10.0
+                st.metric(label="**SPY**", value=f"${spy_equiv:.2f}")
+
+        st.markdown(f"<div style='text-align: center; font-size: 13px; color: #00E676; margin-bottom: 15px;'>Live Dividend Gap: {offset_gap:.2f} pts</div>", unsafe_allow_html=True)
+
+render_converter()
+st.sidebar.divider()
 
 st.set_page_config(page_title="Universal GEX Dashboard", layout="wide")
 st.title(f"{ticker_input} Gamma Exposure (GEX) Profile")
@@ -178,8 +255,6 @@ if ticker_input:
             key="exp_widget",
             on_change=sync_exps
         )
-
-
         raw_selected_exps = [exp_mapping[label] for label in selected_exps]
         title_dates = ", ".join(raw_selected_exps)
 
@@ -419,7 +494,6 @@ if ticker_input:
                     )
 else:
     # --- SPLASH SCREEN / EMPTY STATE ---
-    
     # It forces the main container to take up exactly 100% of the screen height
     # and vertically/horizontally centers everything inside it.
     st.markdown(
