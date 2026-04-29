@@ -1,11 +1,13 @@
-from scipy.stats import norm
 import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import plotly.express as px
 import datetime
 import calendar
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from scipy.stats import norm
 
 # --- CSS: Hide Crosshair, Keep Axis Stretch Arrows ---
 st.markdown(
@@ -126,51 +128,45 @@ def render_converter():
 
     # 1. Initialize the direction state and target memory
     if "conv_dir" not in st.session_state:
-        st.session_state.conv_dir = "SPY_TO_SPX"  # Defaults to SPY -> SPX as requested
+        st.session_state.conv_dir = "SPY_TO_SPX" 
     if "calc_target_spx" not in st.session_state:
         st.session_state.calc_target_spx = spx_live
     if "calc_target_spy" not in st.session_state:
         st.session_state.calc_target_spy = spy_live
 
     # 2. Callback function to instantly swap the active direction
-
-
-    with st.sidebar.popover("SPX ↔ SPY Converter", use_container_width=True):    
+    with st.sidebar.popover("SPX ↔ SPY Converter", use_container_width=True):
         col_in, col_btn, col_out = st.columns([4, 2, 4], vertical_alignment="bottom")
         
-        # Place the swap button in the center column
         with col_btn:
             st.markdown(
                 """
                 <style>
-                /* Target the paragraph tag inside any tertiary button */
-                button[kind="tertiary"] p {
-                    font-size: 32px !important; 
-                    line-height: 0 !important; 
-                }
-                [data-testid="stMetric"] {
-                    margin-top: 16px !important; 
-                }
+                button[kind="tertiary"] p { font-size: 36px !important; line-height: 0 !important; }
+                [data-testid="stMetric"] { margin-top: 16px !important; }
                 </style>
                 """,
                 unsafe_allow_html=True
             )
             st.button("↔️", on_click=swap_converter_direction, use_container_width=True, key="swap_btn", type="tertiary")
 
-        # Render the UI dynamically based on which direction is active
-        if st.session_state.conv_dir == "SPY_TO_SPX":
-            with col_in:
-                spy_target = st.number_input("**SPY**", step=1.0, format="%.2f", key="calc_target_spy")
-            with col_out:
-                spx_equiv = (spy_target * 10.0) + offset_gap
-                st.metric(label="**SPX**", value=f"${spx_equiv:.2f}")
-                
-        else: # SPX_TO_SPY direction
-            with col_in:
-                spx_target = st.number_input("**SPX**", step=10.0, format="%.2f", key="calc_target_spx")
-            with col_out:
-                spy_equiv = (spx_target - offset_gap) / 10.0
-                st.metric(label="**SPY**", value=f"${spy_equiv:.2f}")
+        # --- CONCISE DYNAMIC UI LOGIC ---
+        is_spy_base = st.session_state.conv_dir == "SPY_TO_SPX"
+        
+        # Dynamically assign labels, keys, and step sizes in one block
+        in_lbl = "**SPY**" if is_spy_base else "**SPX**"
+        out_lbl = "**SPX**" if is_spy_base else "**SPY Equiv**"
+        step_val = 1.0 if is_spy_base else 10.0
+        in_key = "calc_target_spy" if is_spy_base else "calc_target_spx"
+
+        # Render the UI exactly once
+        with col_in:
+            target_val = st.number_input(in_lbl, step=step_val, format="%.2f", key=in_key)
+            
+        with col_out:
+            # Calculate the pure math inline
+            equiv_val = (target_val * 10.0) + offset_gap if is_spy_base else (target_val - offset_gap) / 10.0
+            st.metric(label=out_lbl, value=f"${equiv_val:.2f}")
 
         st.markdown(f"<div style='text-align: center; font-size: 13px; color: #00E676; margin-bottom: 15px;'>Live Dividend Gap: {offset_gap:.2f} pts</div>", unsafe_allow_html=True)
 
@@ -186,6 +182,7 @@ def get_ticker_data(ticker_symbol):
     try:
         temp_ticker = yf.Ticker(ticker_symbol)
         hist_reg = temp_ticker.history(period="1d")
+        price_df = temp_ticker.history(period="1d", interval="5m")
 
         # Pull extended hours for the sidebar display
         hist_ext = temp_ticker.history(period="1d", interval="1m", prepost=True)
@@ -199,12 +196,12 @@ def get_ticker_data(ticker_symbol):
         ext_price = float(hist_ext['Close'].iloc[-1]) if not hist_ext.empty else spot_price
 
         expirations = list(temp_ticker.options)
-        return spot_price, ext_price, expirations
+        return spot_price, ext_price, price_df, expirations
     except Exception as e:
-        return None, None, []
+        return None, None, None, []
 
 if ticker_input:
-    spot_price, ext_price, expirations = get_ticker_data(ticker_input)
+    spot_price, ext_price, price_df, expirations = get_ticker_data(ticker_input)
     
     if spot_price is None or not expirations:
         st.error(f"❌ Could not retrieve options data for '{ticker_input}'. Please verify the ticker symbol.")
@@ -258,11 +255,9 @@ if ticker_input:
         raw_selected_exps = [exp_mapping[label] for label in selected_exps]
         title_dates = ", ".join(raw_selected_exps)
 
-        # 3. Process Options Chains
+        # 3. Process Options Chains 
         if selected_exps:
-            # Translate the user's pretty selection back to the raw dates yfinance needs
             raw_selected_exps = [exp_mapping[label] for label in selected_exps]
-
             all_dfs = []
             
             # Loop through each selected expiration
@@ -287,213 +282,263 @@ if ticker_input:
                 r = 0.053 
 
                 calls['Gamma'] = calls.apply(lambda row: calculate_gamma(spot_price, row['strike'], T, r, row['impliedVolatility']), axis=1)
-                calls['GEX'] = calls['openInterest'] * calls['Gamma'] * 100 * spot_price
+                calls['Call GEX'] = calls['openInterest'] * calls['Gamma'] * 100 * spot_price
                 calls['Type'] = 'Call'
 
                 puts['Gamma'] = puts.apply(lambda row: calculate_gamma(spot_price, row['strike'], T, r, row['impliedVolatility']), axis=1)
-                puts['GEX'] = puts['openInterest'] * puts['Gamma'] * 100 * spot_price * -1
+                puts['Put GEX'] = puts['openInterest'] * puts['Gamma'] * 100 * spot_price * -1
                 puts['Type'] = 'Put'
 
+                # Group by 'strike' to aggregate all expirations together
+                call_gex = calls.groupby('strike')['Call GEX'].sum().reset_index()
+                put_gex = puts.groupby('strike')['Put GEX'].sum().reset_index()
+
+                # Merge them together into one DataFrame
+                net_gex = pd.merge(call_gex, put_gex, on='strike', how='outer').fillna(0)
+
+                # 5. Calculate the Final Net GEX
+                net_gex['Net GEX'] = net_gex['Call GEX'] + net_gex['Put GEX']
+
                 # Add processed calls and puts for this specific expiration to our master list
-                all_dfs.extend([calls, puts])
+                all_dfs.extend([calls, puts, net_gex])
             
             # --- AGGREGATION ---
             if not all_dfs:
                 st.warning(f"⚠️ Yahoo Finance returned empty options data for '{ticker_input}' on the selected dates.")
                 st.stop()
             else:
-                # Smash all the expirations together into one massive dataset
-                df = pd.concat(all_dfs, ignore_index=True)
 
-                lower_bound = spot_price * 0.85
-                upper_bound = spot_price * 1.15
+                if 'chart_view' not in st.session_state:
+                    st.session_state.chart_view = 0 # 0: 3-pane, 1: Put/Call GEX, 2: Net GEX
 
-                df_filtered = df[(df['strike'] >= lower_bound) & (df['strike'] <= upper_bound)]
-                df_filtered = df_filtered.dropna(subset=['GEX'])
+                def cycle_view():
+                    st.session_state.chart_view = (st.session_state.chart_view + 1) % 3
+
+                # DYNAMIC UI ROUTING
+                next_view_labels = [
+                    "➡️ Horizontal Put/Call GEX", # If currently on View 0
+                    "➡️ Horizontal Net GEX",      # If currently on View 1
+                    "➡️ 3-Pane Order Flow"        # If currently on View 2
+                ]
+
+                # Button right-aligned using a single column
+                btn_col = st.columns([0.7, 0.3])[1]
+                with btn_col:
+                    st.button(
+                        next_view_labels[st.session_state.chart_view], 
+                        on_click=cycle_view, 
+                        width='stretch'
+                    )
+
+                # --- CALCULATE GAMMA FLIP ---
+                # Finds the strike price where the absolute value of Net GEX is closest to zero
+                try:
+                    gamma_flip = net_gex.iloc[(net_gex['Net GEX'].abs()).argmin()]['strike']
+                except ValueError:
+                    gamma_flip = spot_price # Fallback just in case the dataframe is empty 
                 
-                # --- NEW FEATURE: Group by Strike AND Type for the colored bars ---
-                gex_breakdown = df_filtered.groupby(['strike', 'Type'])['GEX'].sum().reset_index()
-                gex_breakdown['GEX_Formatted'] = gex_breakdown['GEX'].apply(format_large_number)
-
-                # --- BACKGROUND MATH: Still calculate Net GEX for the Gamma Flip line ---
-                net_gex = df_filtered.groupby('strike')['GEX'].sum().reset_index()
-                net_gex = net_gex.sort_values(by='strike').reset_index(drop=True)
-                net_gex['GEX_Formatted'] = net_gex['GEX'].apply(format_large_number)
+                # --- DEFAULT STARTING ZOOM FOR VIEW 0 ---
+                try:
+                    day_low = price_df['Low'].min()
+                    day_high = price_df['High'].max()
+                except Exception:
+                    day_low = spot_price * 0.99
+                    day_high = spot_price * 1.01
                 
-                # We now check if the breakdown is empty instead of net_gex
-                if gex_breakdown.empty or gex_breakdown['GEX'].abs().sum() == 0:
-                    if ticker_input.startswith('^'):
-                        st.info(
-                            f"🌙 **After-Hours Data Unavailable**\n\n"
-                            f"Yahoo Finance clears options volume and open interest data for indices like `{ticker_input}` outside of regular US market hours. "
-                            f"The data will repopulate tomorrow morning.\n\n"
-                            f"💡 **Try using the ETF equivalent (e.g., `SPY` instead of `^SPX`) to test the dashboard right now!**"
-                        )
-                    else:
-                        st.warning(f"⚠️ No active strikes found within range.")
-                        
-                    # EMERGENCY BRAKE: Halts the script before the chart crashes!
-                    st.stop()
+                price_range = day_high - day_low
+                padding = price_range * 0.15 if price_range > 0 else (spot_price * 0.005)
+                y_min = day_low - padding
+                y_max = day_high + padding
+
+
+                # --- CALCULATE WIDE ZOOM FOR VIEWS 1 & 2 ---
+                # Filter for strikes that actually have some GEX to ignore empty rows
+                active_gex = net_gex[(net_gex['Call GEX'].abs() > 0) | (net_gex['Put GEX'].abs() > 0)]
+                
+                if not active_gex.empty:
+                    # Grab the 7.5th and 92.5th percentiles to perfectly frame ~85% of the active strikes
+                    gex_x_min = active_gex['strike'].quantile(0.075)
+                    gex_x_max = active_gex['strike'].quantile(0.925)
                 else:
-                    zero_crossings = []
-                    
-                    for i in range(1, len(net_gex)):
-                        gex1 = net_gex['GEX'].iloc[i-1]
-                        gex2 = net_gex['GEX'].iloc[i]
-                        
-                        # If the GEX values multiply to a negative, it means one is positive and one is negative (a sign flip)
-                        if gex1 * gex2 < 0:
-                            strike1 = net_gex['strike'].iloc[i-1]
-                            strike2 = net_gex['strike'].iloc[i]
-                            # Interpolate exact price where GEX crosses 0
-                            zero_price = strike1 - gex1 * ((strike2 - strike1) / (gex2 - gex1))
-                            zero_crossings.append(zero_price)
-                    
-                    # If multiple flips exist, isolate the one closest to the current spot price
-                    gamma_flip = None
-                    if zero_crossings:
-                        gamma_flip = min(zero_crossings, key=lambda x: abs(x - spot_price))
+                    # Fallback just in case the dataframe is empty
+                    gex_x_min = spot_price * 0.7 
+                    gex_x_max = spot_price * 1.3
 
-                    # We use columns to push the toggle switch to the right side of the screen
-                    col1, col2 = st.columns([5, 1])
-                    with col2:
-                        show_split = st.toggle("Split Put/Call View", value=True)
 
-                    # 4. Plotting with Plotly
-                    if show_split:
-                        # Render the Split Green/Red Chart
-                        fig = px.bar(
-                            gex_breakdown, 
-                            x='strike', 
-                            y='GEX', 
-                            color='Type', 
-                            title=f"Put/Call GEX Profile for {ticker_input} ({title_dates})",
-                            labels={'strike': 'Strike Price', 'GEX': 'Gamma Exposure ($)', 'Type': 'Option Type'},
-                            color_discrete_map={'Call': '#00E676', 'Put': '#FF1744'}, 
-                            custom_data=['GEX_Formatted'] 
-                        )
+                # ROUTER LOGIC
+                if st.session_state.chart_view == 0:
+                    # ==========================================
+                    # VIEW 0: THE 3-PANE VERTICAL ORDER FLOW
+                    # ==========================================
+
+                    fig = make_subplots(
+                        rows=1, cols=3,
+                        shared_yaxes=True, 
+                        column_widths=[0.5, 0.22, 0.23], 
+                        horizontal_spacing=0.06, # Extremely tight spacing to fuse the charts together
+                        subplot_titles=("Live Price Action (5m)", "Put / Call GEX", "Net GEX Profile")
+                    )
+
+                    # --- PANE 1: Candlestick Chart (Row 1, Col 1) ---
+                    fig.add_trace(
+                        go.Candlestick(
+                            x=price_df.index,
+                            open=price_df['Open'],
+                            high=price_df['High'],
+                            low=price_df['Low'],
+                            close=price_df['Close'],
+                            name="Price",
+                            increasing_line_color='#00E676', # Vibrant green
+                            decreasing_line_color='#FF5252'  # Vibrant red
+                        ),
+                        row=1, col=1
+                    )
+
+                    # --- PANE 2: Split Put / Call GEX (Row 1, Col 2) ---
+                    fig.add_trace(
+                        go.Bar(
+                            x=all_dfs[2]['Call GEX'], 
+                            y=all_dfs[2]['strike'],
+                            orientation='h',
+                            marker_color='rgba(0, 230, 118, 0.7)', # Transparent Green
+                            name="Call GEX",
+                            hovertemplate='<b>Strike:</b> %{y}<br><b>Call GEX:</b> %{x:,.0f}<extra></extra>'
+                        ),
+                        row=1, col=2
+                    )
+                    
+                    fig.add_trace(
+                        go.Bar(
+                            x=all_dfs[2]['Put GEX'], 
+                            y=all_dfs[2]['strike'],
+                            orientation='h',
+                            marker_color='rgba(255, 82, 82, 0.7)', # Transparent Red
+                            name="Put GEX",
+                            hovertemplate='<b>Strike:</b> %{y}<br><b>Put GEX:</b> %{x:,.0f}<extra></extra>'
+                        ),
+                        row=1, col=2
+                    )
+
+                    # --- PANE 3: Vertical Net GEX Profile (Row 1, Col 3) ---
+                    net_colors = all_dfs[2]['Net GEX'].apply(lambda x: 'rgba(0, 230, 118, 0.9)' if x > 0 else 'rgba(255, 82, 82, 0.9)').tolist()
+
+                    fig.add_trace(
+                        go.Bar(
+                            x=all_dfs[2]['Net GEX'],   
+                            y=all_dfs[2]['strike'],    
+                            orientation='h',        
+                            marker_color=net_colors,
+                            name="Net GEX",
+                            hovertemplate='<b>Strike:</b> %{y}<br><b>Net GEX:</b> %{x:,.0f}<extra></extra>'
+                        ),
+                        row=1, col=3
+                    )
+
+                    # --- FORMATTING AND AXIS SYNCING ---
+                    # Global Spot Price Line (Cuts across ALL THREE panes natively)
+                    fig.add_hline(y=spot_price, line_dash="dash", line_color="black", opacity=0.7,
+                        annotation_text=f" Spot: ${spot_price:.2f} ", 
+                        annotation_position="top right", 
+                        row=1, col=1) # Annotation only sits on the price pane so it doesn't overlap data
+
+                    # --- CALCULATE CANDLESTICK SPACING ---
+                    num_candles_to_show = 40
+                    if len(price_df) > num_candles_to_show:
+                        x_start = price_df.index[-num_candles_to_show]
+                        x_end = price_df.index[-1]
                     else:
-                        # Render the Original Net GEX Heatmap Chart
-                        fig = px.bar(
-                            net_gex, 
-                            x='strike', 
-                            y='GEX', 
-                            title=f"Net GEX Profile for {ticker_input} ({title_dates})",
-                            labels={'strike': 'Strike Price', 'GEX': 'Net Gamma Exposure ($)'},
-                            color='GEX',
-                            color_continuous_scale=[(0, "red"), (0.5, "white"), (1, "green")],
-                            color_continuous_midpoint=0,
-                            custom_data=['GEX_Formatted'] 
-                        )
+                        x_start = price_df.index[0]
+                        x_end = price_df.index[-1]
+                        
+                    # Optional: Add a tiny bit of future time padding to the right so 
+                    # the current live candle isn't touching the edge of the GEX chart
+                    x_end_padded = x_end + datetime.timedelta(minutes=15)
+
+                    # --- 1. CORE LAYOUT & SHADING ---
+                    fig.update_layout(
+                        height=600, 
+                        template="plotly_dark",
+                        showlegend=False,
+                        barmode='relative', 
+                        bargap=0.5, 
+                        paper_bgcolor="rgba(0,0,0,0)", 
+                        plot_bgcolor="rgba(255, 255, 255, 0.03)", 
+                        margin=dict(l=60, r=40, t=90, b=80, pad=4), 
+                        
+                        # --- INDIVIDUAL AXIS SETTINGS ---
+                        yaxis=dict(range=[y_min, y_max], title="Price / Strike", fixedrange=False, automargin=True), 
+                        xaxis=dict(range=[x_start, x_end_padded], rangeslider=dict(visible=False), automargin=True), 
+                        xaxis2=dict(title="Call / Put GEX", showgrid=True, zeroline=True, zerolinecolor='white', zerolinewidth=1, fixedrange=False, automargin=True, tickformat='.1s'), 
+                        xaxis3=dict(title="Net GEX", showgrid=True, zeroline=True, zerolinecolor='white', zerolinewidth=1, fixedrange=False, automargin=True, tickformat='.1s')
+                    )
+
+                    # --- 3. BORDERING (THE MAGIC TRICK) ---
+                    border_style = dict(showline=True, linewidth=1, linecolor='rgba(255, 255, 255, 0.15)', mirror=True)
                     
-                    # Apply the hover template to whichever chart is active
-                    fig.update_traces(hovertemplate='<b>Strike:</b> %{x}<br><b>GEX:</b> %{customdata[0]}<extra></extra>')
+                    fig.update_xaxes(**border_style)
+                    fig.update_yaxes(**border_style)
+
+                    st.plotly_chart(fig, width='stretch', config={'scrollZoom': True})
+                else:
+                    # ==========================================
+                    # VIEWS 1 & 2: HORIZONTAL CHARTS + TABLE
+                    # ==========================================
+
+                    fig = go.Figure()
                     
-                    # Add Spot Price Line
+                    # 1. Define the specific traces and titles based on the view state
+                    if st.session_state.chart_view == 1:
+                        chart_title = "Put/Call Gamma Exposure by Strike"
+                        y_title = "Gamma Exposure ($)"
+                        table_cols = ['strike', 'Call GEX', 'Put GEX', 'Net GEX']
+                        
+                        fig.add_trace(go.Bar(x=net_gex['strike'], y=net_gex['Call GEX'], name='Call GEX', marker_color='rgba(0, 230, 118, 0.8)'))
+                        fig.add_trace(go.Bar(x=net_gex['strike'], y=net_gex['Put GEX'], name='Put GEX', marker_color='rgba(255, 82, 82, 0.8)'))
+                        fig.update_layout(barmode='relative')
+                        
+                    else: # View 2
+                        chart_title = "Net Gamma Exposure by Strike"
+                        y_title = "Net Gamma Exposure ($)"
+                        table_cols = ['strike', 'Net GEX']
+                        
+                        net_colors = ['rgba(0, 230, 118, 0.8)' if x > 0 else 'rgba(255, 82, 82, 0.8)' for x in net_gex['Net GEX']]
+                        fig.add_trace(go.Bar(x=net_gex['strike'], y=net_gex['Net GEX'], name='Net GEX', marker_color=net_colors))
+
+                    # Spot price vertical line
                     fig.add_vline(
                         x=spot_price, 
                         line_dash="dash", 
                         line_color="blue", 
-                        annotation_text=f"Spot: ${spot_price:.2f}",
-                        annotation_position="top" 
+                        opacity=0.8,
+                        annotation_text=f"Spot: ${spot_price:.2f}", 
+                        annotation_font_color="blue",
+                        annotation_position="top"
                     )
-                    
-                    # Add Gamma Flip Line
-                    if gamma_flip:
-                        fig.add_vline(
-                            x=gamma_flip, 
-                            line_dash="dot", 
-                            line_color="orange", 
-                            annotation_text=f"Gamma Flip: ${gamma_flip:.2f}",
-                            annotation_position="bottom",
-                            annotation_font_color="orange"
-                        )
-                    
-                    startup_x_min = spot_price * 0.95
-                    startup_x_max = spot_price * 1.05
+
+                    # Gamma flip vertical line       
+                    fig.add_vline(
+                        x=gamma_flip, 
+                        line_dash="dot", 
+                        line_color="#FFA000", 
+                        opacity=0.8,
+                        annotation_text=f"Gamma Flip: ${gamma_flip:.0f}", 
+                        annotation_font_color="#FFA000",
+                        annotation_position="bottom left"
+                    )
 
                     fig.update_layout(
-                        xaxis=dict(
-                            tickformat='~g',
-                            range=[startup_x_min, startup_x_max],
-                            fixedrange=False,
-                            automargin=True,
-                            title_standoff=15
-                        ), 
-                        yaxis=dict(
-                            fixedrange=False 
-                        ),
-                        template="plotly_dark", 
-                        dragmode="zoom",         
-                        height=600,                 
-                        margin=dict(t=50, b=100, l=50, r=20), # <--- Forces an 80px bottom margin so labels NEVER cut off
-                        font=dict(size=14),         # <--- Slightly scaled down so the text doesn't crowd the container
-                        bargap=0.15,                
-                        hoverlabel=dict(font_size=16),
-                        legend_title_text='',
-                        autosize=True               # <--- Ensures Plotly listens to Streamlit's container width
-                    )
-                    
-                    st.plotly_chart(fig, width='stretch', config={'scrollZoom': True})
+                            title=chart_title,
+                            template="plotly_dark",
+                            xaxis=dict(title="Strike Price", range=[gex_x_min, gex_x_max], fixedrange=False, type="linear"),
+                            yaxis=dict(title=y_title, fixedrange=False, type="linear")
+                        )
+                        
+                    st.plotly_chart(fig, width='stretch', config={'scrollZoom': True, 'displayModeBar': True})
+                    st.markdown("### GEX Data Table")
+                    st.dataframe(net_gex[table_cols], width='stretch')
 
-                    # --- Dynamic Raw Data Table ---
-                    st.markdown("### Raw Strike Data")
-                    
-                    # 1. Prepare Base DataFrame based on View
-                    if show_split:
-                        split_table = df_filtered.pivot_table(
-                            index='strike', columns='Type', values='GEX', aggfunc='sum'
-                        ).reset_index().fillna(0)
-                        
-                        if 'Call' not in split_table.columns: split_table['Call'] = 0
-                        if 'Put' not in split_table.columns: split_table['Put'] = 0
-                            
-                        split_table['Call GEX'] = split_table['Call'].apply(format_large_number)
-                        split_table['Put GEX'] = split_table['Put'].apply(format_large_number)
-                        
-                        display_df = split_table[['strike', 'Call GEX', 'Put GEX']].sort_values('strike')
-                        display_df.rename(columns={'strike': 'Strike'}, inplace=True)
-                    else:
-                        display_df = net_gex[['strike', 'GEX_Formatted']].copy()
-                        display_df.rename(columns={'strike': 'Strike', 'GEX_Formatted': 'Net GEX'}, inplace=True)
-                        display_df = display_df.sort_values('Strike')
-                        
-                    # 2. Apply Universal ITM Shading
-                    def style_itm_universal(data):
-                        # Create an empty styling grid that matches the table's dimensions
-                        styles = pd.DataFrame('', index=data.index, columns=data.columns)
-                        
-                        # Failsafe: Force the Strike column to strictly evaluate as float math
-                        strikes = data['Strike'].astype(float)
-                        
-                        # Apply shading exactly where the conditions are met
-                        if 'Call GEX' in data.columns:
-                            styles.loc[strikes < spot_price, 'Call GEX'] = 'background-color: rgba(128, 128, 128, 0.2)'
-                            
-                        if 'Put GEX' in data.columns:
-                            styles.loc[strikes > spot_price, 'Put GEX'] = 'background-color: rgba(128, 128, 128, 0.2)'
-                            
-                        if 'Net GEX' in data.columns:
-                            styles.loc[strikes > spot_price, 'Net GEX'] = 'background-color: rgba(128, 128, 128, 0.2)'
-                            
-                        return styles
-                        
-                    styled_df = display_df.style.apply(style_itm_universal, axis=None)
-                    
-                    # 3. Render Table with Dynamic Column Configuration
-                    dynamic_col_config = {"Strike": st.column_config.NumberColumn("Strike", width="medium",format="%g")}
-                    for col in display_df.columns:
-                        if col != "Strike":
-                            dynamic_col_config[col] = st.column_config.Column(col, width="medium")
-                    
-                    st.dataframe(
-                        styled_df, 
-                        width='stretch',
-                        hide_index=True,
-                        column_config=dynamic_col_config
-                    )
 else:
-    # --- SPLASH SCREEN / EMPTY STATE ---
+    # --- DEFAULT SCREEN ---
     # It forces the main container to take up exactly 100% of the screen height
     # and vertically/horizontally centers everything inside it.
     st.markdown(
