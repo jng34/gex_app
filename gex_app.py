@@ -316,8 +316,8 @@ if ticker_input:
 
                 # DYNAMIC UI ROUTING
                 next_view_labels = [
-                    "➡️ Horizontal Put/Call GEX", # If currently on View 0
-                    "➡️ Horizontal Net GEX",      # If currently on View 1
+                    "➡️ Put/Call GEX", # If currently on View 0
+                    "➡️ Net GEX",      # If currently on View 1
                     "➡️ 3-Pane Order Flow"        # If currently on View 2
                 ]
 
@@ -331,11 +331,28 @@ if ticker_input:
                     )
 
                 # --- CALCULATE GAMMA FLIP ---
-                # Finds the strike price where the absolute value of Net GEX is closest to zero
                 try:
-                    gamma_flip = net_gex.iloc[(net_gex['Net GEX'].abs()).argmin()]['strike']
-                except ValueError:
-                    gamma_flip = spot_price # Fallback just in case the dataframe is empty 
+                    # 1. Sort by strike to ensure sequential order
+                    temp_df = net_gex.sort_values('strike').copy()
+                    
+                    # 2. Filter out strikes with exactly 0 GEX (removes deep OTM noise)
+                    temp_df = temp_df[temp_df['Net GEX'] != 0]
+                    
+                    # 3. Detect zero-crossings (where the sign changes from + to - or - to +)
+                    temp_df['sign'] = np.sign(temp_df['Net GEX'])
+                    temp_df['sign_shift'] = temp_df['sign'].diff()
+                    
+                    # 4. Isolate only the strikes where a transition occurred
+                    flips = temp_df[temp_df['sign_shift'] != 0].dropna()
+                    
+                    if not flips.empty:
+                        # 5. Find the specific flip that is closest to the current Spot Price
+                        gamma_flip = flips.iloc[(flips['strike'] - spot_price).abs().argmin()]['strike']
+                    else:
+                        gamma_flip = spot_price
+                except Exception:
+                    gamma_flip = spot_price # Safe fallback
+                    
                 
                 # --- DEFAULT STARTING ZOOM FOR VIEW 0 ---
                 try:
@@ -466,7 +483,7 @@ if ticker_input:
                         margin=dict(l=60, r=40, t=90, b=80, pad=4), 
                         
                         # --- INDIVIDUAL AXIS SETTINGS ---
-                        yaxis=dict(range=[y_min, y_max], title="Price / Strike", fixedrange=False, automargin=True), 
+                        yaxis=dict(range=[y_min, y_max], title="Price / Strike", fixedrange=False, automargin=True, minallowed=0),
                         xaxis=dict(range=[x_start, x_end_padded], rangeslider=dict(visible=False), automargin=True), 
                         xaxis2=dict(title="Call / Put GEX", showgrid=True, zeroline=True, zerolinecolor='white', zerolinewidth=1, fixedrange=False, automargin=True, tickformat='.1s'), 
                         xaxis3=dict(title="Net GEX", showgrid=True, zeroline=True, zerolinecolor='white', zerolinewidth=1, fixedrange=False, automargin=True, tickformat='.1s')
@@ -526,12 +543,55 @@ if ticker_input:
                         annotation_position="bottom left"
                     )
 
+                    # --- NEW BACKGROUND SHADING ---
+                    # Create massive bounds so the shading doesn't break if the user zooms all the way out
+                    abs_min_strike = net_gex['strike'].min() * 0.1
+                    abs_max_strike = net_gex['strike'].max() * 2.0
+
+                    # Shade the "Below Flip" area (Light Orange)
+                    fig.add_vrect(
+                        x0=abs_min_strike, x1=gamma_flip, 
+                        fillcolor="rgba(255, 160, 0, 0.1)", # 6% opacity orange
+                        layer="below", line_width=0 
+                    )
+
+                    # Shade the "Above Flip" area (Light Green)
+                    fig.add_vrect(
+                        x0=gamma_flip, x1=abs_max_strike, 
+                        fillcolor="rgba(0, 230, 118, 0.1)", # 5% opacity green
+                        layer="below", line_width=0
+                    )
+
+                    # We use invisible scatter plots with square markers to force the custom colors into the legend.
+                    # Note: We bump the opacity from 0.05 up to 0.5 here so the squares are actually visible in the legend box!
+                    fig.add_trace(go.Scatter(
+                        x=[None], y=[None],
+                        mode='markers',
+                        marker=dict(size=15, color="rgba(0, 230, 118, 0.1)", symbol='square'),
+                        name="Positive GEX Regime"
+                    ))
+                    
+                    fig.add_trace(go.Scatter(
+                        x=[None], y=[None],
+                        mode='markers',
+                        marker=dict(size=15, color="rgba(255, 160, 0, 0.1)", symbol='square'),
+                        name="Negative GEX Regime"
+                    ))
+
                     fig.update_layout(
-                            title=chart_title,
-                            template="plotly_dark",
-                            xaxis=dict(title="Strike Price", range=[gex_x_min, gex_x_max], fixedrange=False, type="linear"),
-                            yaxis=dict(title=y_title, fixedrange=False, type="linear")
-                        )
+                        showlegend=True,
+                        legend=dict(
+                            orientation="v",       # Vertical stack
+                            yanchor="top",
+                            y=1.0,                 # Align with the top of the chart
+                            xanchor="left",
+                            x=1.02                 # Push slightly outside the right edge of the grid
+                        ),
+                        title=chart_title,
+                        template="plotly_dark",
+                        xaxis=dict(title="Strike Price", range=[gex_x_min, gex_x_max], fixedrange=False, type="linear", minallowed=0),
+                        yaxis=dict(title=y_title, fixedrange=False, type="linear")
+                    )
                         
                     st.plotly_chart(fig, width='stretch', config={'scrollZoom': True, 'displayModeBar': True})
                     st.markdown("### GEX Data Table")
