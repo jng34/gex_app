@@ -9,6 +9,32 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from scipy.stats import norm
 
+# --- 1. RESTORE STATE FROM URL ON REFRESH ---
+if "app_loaded" not in st.session_state:
+    # If a parameter exists in the URL, inject it into the session state!
+    if "ticker" in st.query_params:
+        st.session_state.active_ticker = st.query_params["ticker"]
+    if "view" in st.query_params:
+        st.session_state.chart_view = int(st.query_params["view"])
+    if "tf" in st.query_params:
+        st.session_state.selected_tf = st.query_params["tf"]
+    if "exp_dates" in st.query_params:
+        st.session_state.selected_exps = st.query_params.get_all("exp_dates")
+        
+    st.session_state.app_loaded = True
+
+# Ensure default states exist if they weren't in the URL
+if "active_ticker" not in st.session_state:
+    st.session_state.active_ticker = ""
+if "chart_view" not in st.session_state:
+    st.session_state.chart_view = 0
+if "selected_tf" not in st.session_state:
+    st.session_state.selected_tf = "5m"
+if "selected_exps" not in st.session_state:
+    st.session_state.selected_exps = [] 
+    
+
+
 # --- CSS: Hide Crosshair, Keep Axis Stretch Arrows ---
 st.markdown(
     """
@@ -103,6 +129,21 @@ def submit_ticker():
     if new_symbol:
         st.session_state.active_ticker = new_symbol
     st.session_state.ticker_search_box = ""
+    # Save the new ticker to the URL param
+    st.query_params["ticker"] = st.session_state.active_ticker
+
+def update_timeframe(new_tf):
+    # This runs the exact millisecond the button is clicked!
+    st.session_state.selected_tf = new_tf
+    st.query_params["tf"] = new_tf
+
+def update_exp_dates():
+    # Grab the current list of dates directly from the widget's memory key
+    new_dates = st.session_state.exp_widget
+    # Update the permanent session state and write the list to the URL
+    st.session_state.selected_exps = new_dates
+    st.query_params["exp_dates"] = new_dates
+
 
 st.sidebar.text_input(
     "Enter Ticker Symbol", 
@@ -178,30 +219,55 @@ st.title(f"{ticker_input} Gamma Exposure (GEX) Profile")
 
 # 2. Fetch Ticker Data
 @st.cache_data(ttl=60) 
-def get_ticker_data(ticker_symbol):
+def get_ticker_data(ticker):
     try:
-        temp_ticker = yf.Ticker(ticker_symbol)
-        hist_reg = temp_ticker.history(period="1d")
-        price_df = temp_ticker.history(period="1d", interval="5m")
+        temp_ticker = yf.Ticker(ticker)
+        raw_price_df = temp_ticker.history(period='1mo', interval='5m')
 
         # Pull extended hours for the sidebar display
         hist_ext = temp_ticker.history(period="1d", interval="1m", prepost=True)
         
-        if hist_reg.empty:
-            return None, None, []
-            
-        spot_price = float(hist_reg['Close'].iloc[-1])
+        spot_price = float(raw_price_df['Close'].iloc[-1])
         
         # If extended hours exist, grab the latest tick. Otherwise, default to spot.
         ext_price = float(hist_ext['Close'].iloc[-1]) if not hist_ext.empty else spot_price
 
         expirations = list(temp_ticker.options)
-        return spot_price, ext_price, price_df, expirations
+        return spot_price, ext_price, raw_price_df, expirations
     except Exception as e:
         return None, None, None, []
+    
+
+# --- 2. THE IN-MEMORY RESAMPLER ---
+def resample_timeframe(raw_df, timeframe):
+    # If the user wants 5m data, just hand them the raw dataframe
+    if timeframe == "5m" or raw_df.empty:
+        return raw_df
+        
+    # Map your UI labels to Pandas timeframe aliases
+    resample_map = {
+        "15m": "15min", # Must use 'min' instead of 'm' for Pandas
+        "30m": "30min",
+        "1h": "1h"
+    }
+    pandas_tf = resample_map.get(timeframe, "15min")
+    
+    # Standard market rules for building a larger candle from smaller ones
+    aggregation_rules = {
+        'Open': 'first', # The open is the first tick of the period
+        'High': 'max',   # The high is the highest tick of the period
+        'Low': 'min',    # The low is the lowest tick of the period
+        'Close': 'last', # The close is the last tick of the period
+        'Volume': 'sum'  # Volume is added all together
+    }
+    
+    # Group the data, apply the rules, and drop any empty chunks (like overnight hours)
+    resampled_df = raw_df.resample(pandas_tf).agg(aggregation_rules).dropna()
+    return resampled_df
 
 if ticker_input:
-    spot_price, ext_price, price_df, expirations = get_ticker_data(ticker_input)
+    spot_price, ext_price, raw_price_df, expirations = get_ticker_data(ticker_input)
+    price_df = resample_timeframe(raw_price_df, st.session_state.selected_tf)
     
     if spot_price is None or not expirations:
         st.error(f"❌ Could not retrieve options data for '{ticker_input}'. Please verify the ticker symbol.")
@@ -221,13 +287,8 @@ if ticker_input:
         exp_mapping = {get_expiration_label(exp): exp for exp in expirations}
         display_options = list(exp_mapping.keys())
         
-        # --- Expiration Memory ---
-        # Initialize the memory bank on first load
-        if 'saved_exps' not in st.session_state:
-            st.session_state.saved_exps = []
-
         # Check which of the previously selected dates actually exist for this new ticker
-        valid_defaults = [exp for exp in st.session_state.saved_exps if exp in display_options]
+        valid_defaults = [exp for exp in st.session_state.selected_exps if exp in display_options]
         
         # Failsafe: If none match (or it's the very first time loading), pick the nearest expiration
         if not valid_defaults and display_options:
@@ -241,17 +302,15 @@ if ticker_input:
         if 'exp_widget' not in st.session_state:
             st.session_state.exp_widget = valid_defaults
 
-        # Callback to sync memory the exact millisecond a user clicks
-        def sync_exps():
-            st.session_state.saved_exps = st.session_state.exp_widget
-        
         selected_exps = st.sidebar.multiselect(
             "Select Expiration Date(s)", 
-            display_options, 
+            options=display_options,
+            default=valid_defaults, 
             max_selections=4,
             key="exp_widget",
-            on_change=sync_exps
+            on_change=update_exp_dates
         )
+    
         raw_selected_exps = [exp_mapping[label] for label in selected_exps]
         title_dates = ", ".join(raw_selected_exps)
 
@@ -313,6 +372,8 @@ if ticker_input:
 
                 def cycle_view():
                     st.session_state.chart_view = (st.session_state.chart_view + 1) % 3
+                    # Save the new view to the URL params
+                    st.query_params["view"] = str(st.session_state.chart_view)
 
                 # DYNAMIC UI ROUTING
                 next_view_labels = [
@@ -388,12 +449,35 @@ if ticker_input:
                     # VIEW 0: THE 3-PANE VERTICAL ORDER FLOW
                     # ==========================================
 
+                    # Create a row of buttons for timeframe selection
+                    tf_col, empty_col = st.columns([2, 5]) 
+    
+                    with tf_col:
+                        tf_options = ["5m", "15m", "30m", "1h"]
+                        # Create a nested row of 4 equally-spaced columns just for the buttons
+                        btn_cols = st.columns(len(tf_options))
+                        
+                        for i, tf in enumerate(tf_options):
+                            with btn_cols[i]:
+                                # Dynamically set the style: "primary" highlights the active one!
+                                btn_style = "primary" if tf == st.session_state.selected_tf else "secondary"
+                                
+                                # THE FIX: Use on_click and args to update the URL flawlessly
+                                st.button(
+                                    label=tf, 
+                                    type=btn_style, 
+                                    use_container_width=True, 
+                                    key=f"btn_tf_{tf}",
+                                    on_click=update_timeframe, # Points to our new function
+                                    args=(tf,)                 # Passes the string (e.g., "15m") to the function
+                                )
+                            
                     fig = make_subplots(
                         rows=1, cols=3,
                         shared_yaxes=True, 
                         column_widths=[0.5, 0.22, 0.23], 
                         horizontal_spacing=0.06, # Extremely tight spacing to fuse the charts together
-                        subplot_titles=("Live Price Action (5m)", "Put / Call GEX", "Net GEX Profile")
+                        subplot_titles=("", "Put / Call GEX", "Net GEX Profile")
                     )
 
                     # --- PANE 1: Candlestick Chart (Row 1, Col 1) ---
