@@ -262,7 +262,7 @@ def resample_timeframe(raw_df, timeframe):
     }
     
     # Group the data, apply the rules, and drop any empty chunks (like overnight hours)
-    resampled_df = raw_df.resample(pandas_tf).agg(aggregation_rules).dropna()
+    resampled_df = raw_df.resample(pandas_tf, offset='30min').agg(aggregation_rules).dropna()
     return resampled_df
 
 if ticker_input:
@@ -305,7 +305,6 @@ if ticker_input:
         selected_exps = st.sidebar.multiselect(
             "Select Expiration Date(s)", 
             options=display_options,
-            default=valid_defaults, 
             max_selections=4,
             key="exp_widget",
             on_change=update_exp_dates
@@ -480,6 +479,25 @@ if ticker_input:
                         subplot_titles=("", "Put / Call GEX", "Net GEX Profile")
                     )
 
+                    # --- ADD DAY DIVIDER LINES ---
+                    # 1. Create a temporary column with just the dates
+                    temp_df = price_df.copy()
+                    temp_df['JustDate'] = temp_df.index.date
+                    first_candles_of_day = temp_df.drop_duplicates(subset=['JustDate'])
+                    
+                    for start_time in first_candles_of_day.index:
+                        fig.add_trace(
+                            go.Scatter(
+                                x=[start_time, start_time], 
+                                y=[0, 9999999], 
+                                mode="lines",
+                                line=dict(dash="dot", color="rgba(128, 130, 140, 0.5)", width=1.5), 
+                                showlegend=False,
+                                hoverinfo="skip"
+                            ),
+                            row=1, col=1
+                        )
+
                     # --- PANE 1: Candlestick Chart (Row 1, Col 1) ---
                     fig.add_trace(
                         go.Candlestick(
@@ -537,7 +555,10 @@ if ticker_input:
 
                     # --- FORMATTING AND AXIS SYNCING ---
                     # Global Spot Price Line (Cuts across ALL THREE panes natively)
-                    fig.add_hline(y=spot_price, line_dash="dash", line_color="black", opacity=0.7,
+                    fig.add_hline(
+                        y=spot_price, 
+                        line_dash="dash", 
+                        line_color="rgba(30, 144, 255, 0.7)",
                         annotation_text=f" Spot: ${spot_price:.2f} ", 
                         annotation_position="top right", 
                         row=1, col=1) # Annotation only sits on the price pane so it doesn't overlap data
@@ -568,7 +589,16 @@ if ticker_input:
                         
                         # --- INDIVIDUAL AXIS SETTINGS ---
                         yaxis=dict(range=[y_min, y_max], title="Price / Strike", fixedrange=False, automargin=True, minallowed=0),
-                        xaxis=dict(range=[x_start, x_end_padded], rangeslider=dict(visible=False), automargin=True), 
+                        # --- Hide weekends and extended hours! ---
+                        xaxis=dict(
+                            range=[x_start, x_end_padded], 
+                            rangeslider=dict(visible=False), 
+                            automargin=True,
+                            rangebreaks=[
+                                dict(bounds=["sat", "mon"]),           # Hides the entire weekend
+                                dict(bounds=[16, 9.25], pattern="hour") # Hides 4:00 PM to 9:30 AM every night
+                            ]
+                        ),
                         xaxis2=dict(title="Call / Put GEX", showgrid=True, zeroline=True, zerolinecolor='white', zerolinewidth=1, fixedrange=False, automargin=True, tickformat='.1s'), 
                         xaxis3=dict(title="Net GEX", showgrid=True, zeroline=True, zerolinecolor='white', zerolinewidth=1, fixedrange=False, automargin=True, tickformat='.1s')
                     )
