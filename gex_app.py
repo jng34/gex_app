@@ -83,25 +83,45 @@ def calculate_gamma(S, K, T, r, sigma):
     gamma = norm.pdf(d1) / (S * sigma * np.sqrt(T))
     return gamma
 
-# --- Expiration Label Generator ---
-def get_expiration_label(exp_str):
-    """Calculates DTE and determines if it is a Monthly (3rd Friday) or Weekly."""
-    exp_date = datetime.datetime.strptime(exp_str, "%Y-%m-%d").date()
+def format_exp_label(date_str, exp_set):
+    exp_date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
     today = datetime.date.today()
     dte = (exp_date - today).days
 
-    # Find the 3rd Friday of the month
-    month_cal = calendar.monthcalendar(exp_date.year, exp_date.month)
-    fridays = [week[4] for week in month_cal if week[4] != 0]
-    third_friday = fridays[2] if len(fridays) >= 3 else None
-
-    # If the expiration day matches the 3rd Friday, it's a Monthly
-    if exp_date.day == third_friday:
+    if date_str in exp_set:
         type_str = "(M)"
     else:
         type_str = "(W)"
 
-    return f"{exp_str} ({dte} DTE) {type_str}"
+    return f"{date_str} ({dte} DTE) {type_str}"
+
+def get_true_monthlies(available_dates):
+    # Convert string dates to datetime objects for math
+    parsed_dates = [datetime.datetime.strptime(d, '%Y-%m-%d').date() for d in available_dates]
+    true_monthlies = set()
+
+    # Find every unique Year/Month combo in the options chain
+    months_seen = set((d.year, d.month) for d in parsed_dates)
+
+    for year, month in months_seen:
+        # Calculate the dates of all Fridays in this specific month
+        cal = calendar.monthcalendar(year, month)
+        fridays = [week[4] for week in cal if week[4] != 0]
+        
+        # Grab the 3rd Friday
+        third_friday_day = fridays[2]
+        third_friday = datetime.date(year, month, third_friday_day)
+
+        if third_friday in parsed_dates:
+            # Standard month: The 3rd Friday is open for trading
+            true_monthlies.add(third_friday.strftime('%Y-%m-%d'))
+        else:
+            # Holiday month: Check if the Thursday right before it exists in the chain
+            thursday_before = third_friday - datetime.timedelta(days=1)
+            if thursday_before in parsed_dates:
+                true_monthlies.add(thursday_before.strftime('%Y-%m-%d'))
+
+    return true_monthlies
 
 # --- SPX/SPY Ratio Converter ---
 def get_spx_spy_ratio():
@@ -281,11 +301,12 @@ if ticker_input:
         )
 
         ticker_obj = yf.Ticker(ticker_input)
+        true_monthlies_set = get_true_monthlies(expirations)
 
         # --- THE TRANSLATION DICTIONARY ---
         # Map the pretty labels to the raw YYYY-MM-DD strings
-        exp_mapping = {get_expiration_label(exp): exp for exp in expirations}
-        display_options = list(exp_mapping.keys())
+        display_options = [format_exp_label(exp, true_monthlies_set) for exp in expirations]
+        exp_mapping = {format_exp_label(exp, true_monthlies_set): exp for exp in expirations}
         
         # Check which of the previously selected dates actually exist for this new ticker
         valid_defaults = [exp for exp in st.session_state.selected_exps if exp in display_options]
@@ -507,8 +528,9 @@ if ticker_input:
                             low=price_df['Low'],
                             close=price_df['Close'],
                             name="Price",
-                            increasing_line_color='#00E676', # Vibrant green
-                            decreasing_line_color='#FF5252'  # Vibrant red
+                            increasing=dict(line=dict(color='#26A69A', width=1.5), fillcolor='#26A69A'),
+                            decreasing=dict(line=dict(color='#EF5350', width=1.5), fillcolor='#EF5350'),
+                            showlegend=False,
                         ),
                         row=1, col=1
                     )
@@ -519,7 +541,7 @@ if ticker_input:
                             x=all_dfs[2]['Call GEX'], 
                             y=all_dfs[2]['strike'],
                             orientation='h',
-                            marker_color='rgba(0, 230, 118, 0.7)', # Transparent Green
+                            marker_color='#2196F3',
                             name="Call GEX",
                             hovertemplate='<b>Strike:</b> %{y}<br><b>Call GEX:</b> %{x:,.0f}<extra></extra>'
                         ),
@@ -531,7 +553,7 @@ if ticker_input:
                             x=all_dfs[2]['Put GEX'], 
                             y=all_dfs[2]['strike'],
                             orientation='h',
-                            marker_color='rgba(255, 82, 82, 0.7)', # Transparent Red
+                            marker_color='#FF9800',
                             name="Put GEX",
                             hovertemplate='<b>Strike:</b> %{y}<br><b>Put GEX:</b> %{x:,.0f}<extra></extra>'
                         ),
@@ -539,14 +561,14 @@ if ticker_input:
                     )
 
                     # --- PANE 3: Vertical Net GEX Profile (Row 1, Col 3) ---
-                    net_colors = all_dfs[2]['Net GEX'].apply(lambda x: 'rgba(0, 230, 118, 0.9)' if x > 0 else 'rgba(255, 82, 82, 0.9)').tolist()
+                    net_gex_colors = ['#2196F3' if val >= 0 else '#FF9800' for val in all_dfs[2]['Net GEX']]
 
                     fig.add_trace(
                         go.Bar(
                             x=all_dfs[2]['Net GEX'],   
                             y=all_dfs[2]['strike'],    
                             orientation='h',        
-                            marker_color=net_colors,
+                            marker_color=net_gex_colors,
                             name="Net GEX",
                             hovertemplate='<b>Strike:</b> %{y}<br><b>Net GEX:</b> %{x:,.0f}<extra></extra>'
                         ),
@@ -595,6 +617,7 @@ if ticker_input:
                         showlegend=False,
                         barmode='relative', 
                         bargap=0.5, 
+                        dragmode='pan',
                         paper_bgcolor="rgba(0,0,0,0)", 
                         plot_bgcolor="rgba(255, 255, 255, 0.03)", 
                         margin=dict(l=60, r=40, t=90, b=80, pad=4), 
