@@ -476,7 +476,7 @@ if ticker_input:
                         shared_yaxes=True, 
                         column_widths=[0.5, 0.22, 0.23], 
                         horizontal_spacing=0.06, # Extremely tight spacing to fuse the charts together
-                        subplot_titles=("", "Put / Call GEX", "Net GEX Profile")
+                        subplot_titles=("", "Put/Call GEX", "Net GEX")
                     )
 
                     # --- ADD DAY DIVIDER LINES ---
@@ -564,17 +564,29 @@ if ticker_input:
                         row=1, col=1) # Annotation only sits on the price pane so it doesn't overlap data
 
                     # --- CALCULATE CANDLESTICK SPACING ---
-                    num_candles_to_show = 40
-                    if len(price_df) > num_candles_to_show:
-                        x_start = price_df.index[-num_candles_to_show]
-                        x_end = price_df.index[-1]
+                    default_visible_candles = 100
+                    
+                    # 2. Create a temporary "view window" of just the most recent data
+                    if len(price_df) > default_visible_candles:
+                        view_df = price_df.iloc[-default_visible_candles:]
                     else:
-                        x_start = price_df.index[0]
-                        x_end = price_df.index[-1]
+                        view_df = price_df
                         
-                    # Optional: Add a tiny bit of future time padding to the right so 
-                    # the current live candle isn't touching the edge of the GEX chart
-                    x_end_padded = x_end + datetime.timedelta(minutes=15)
+                    # 3. Set the X-Axis bounds to only span our clean view window
+                    x_start = view_df.index[0]
+                    
+                    # Calculate the exact time gap between candles to add 5 "blank" candles of padding to the right
+                    if len(view_df) >= 2:
+                        candle_width = view_df.index[-1] - view_df.index[-2]
+                    else:
+                        candle_width = pd.Timedelta(minutes=5)
+                        
+                    x_end_padded = view_df.index[-1] + (candle_width * 5)
+                    
+                    # 4. Set the Y-Axis bounds strictly based on the visible window, NOT the whole month!
+                    # We multiply by 0.998 and 1.002 to add a perfect 0.2% vertical margin so the wicks don't touch the ceiling/floor
+                    y_min = view_df['Low'].min() * 0.998
+                    y_max = view_df['High'].max() * 1.002
 
                     # --- 1. CORE LAYOUT & SHADING ---
                     fig.update_layout(
