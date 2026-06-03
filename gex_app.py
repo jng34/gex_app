@@ -148,6 +148,11 @@ def submit_ticker():
     new_symbol = st.session_state.ticker_search_box.strip().upper()
     if new_symbol:
         st.session_state.active_ticker = new_symbol
+        # Completely wipe the old ticker's dates from memory so the new ticker uses its own smart defaults
+        st.session_state.selected_exps = []
+        if "exp_widget" in st.session_state:
+            del st.session_state["exp_widget"]
+            
     st.session_state.ticker_search_box = ""
     # Save the new ticker to the URL param
     st.query_params["ticker"] = st.session_state.active_ticker
@@ -308,12 +313,30 @@ if ticker_input:
         display_options = [format_exp_label(exp, true_monthlies_set) for exp in expirations]
         exp_mapping = {format_exp_label(exp, true_monthlies_set): exp for exp in expirations}
         
+        # ==========================================
+        # CALCULATE SMART DEFAULTS (4 DATES)
+        # ==========================================
+        if display_options:
+            # 1. Grab the absolute closest two expirations
+            closest_two = display_options[:2]
+            
+            # 2. Find all Monthlies in the remaining list by looking for the (M) tag
+            remaining_monthlies = [opt for opt in display_options[2:] if "(M)" in opt]
+            
+            # 3. Combine them to grab exactly 4 unique dates (2 closest + next 2 monthlies)
+            smart_defaults = closest_two + remaining_monthlies[:2]
+        else:
+            smart_defaults = []
+
+        # ==========================================
+        # STATE CLEANSER & DEFAULT INJECTION
+        # ==========================================
         # Check which of the previously selected dates actually exist for this new ticker
         valid_defaults = [exp for exp in st.session_state.selected_exps if exp in display_options]
         
-        # Failsafe: If none match (or it's the very first time loading), pick the nearest expiration
-        if not valid_defaults and display_options:
-            valid_defaults = [display_options[0]]
+        # Failsafe: If no valid saved dates exist (e.g. first load or switched ticker), use our smart defaults!
+        if not valid_defaults:
+            valid_defaults = smart_defaults
 
         if 'exp_widget' in st.session_state:
             if any(val not in display_options for val in st.session_state.exp_widget):
